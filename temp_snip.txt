@@ -1,0 +1,80 @@
+      );
+    }
+    // Placeholder for local files without artwork.
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Color(0xFF2a2b32), Color(0xFF1c1d22)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.album, size: 42, color: Colors.white70),
+            const SizedBox(height: 6),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Text(
+                track.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Map<String, List<app.Track>> _groupAlbums(List<app.Track> tracks) {
+    final map = <String, List<app.Track>>{};
+    for (final t in tracks) {
+      final key = (t.album?.trim().isNotEmpty ?? false)
+          ? t.album!.trim()
+          : t.title;
+      map.putIfAbsent(key, () => []).add(t);
+    }
+    return map;
+  }
+
+  void _openAlbumDetails(
+    BuildContext context,
+    PlayerNotifier notifier,
+    String album,
+    List<app.Track> tracks,
+  ) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF161718),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        final coverTrack = tracks.first;
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.85,
+          minChildSize: 0.6,
+          builder: (context, controller) {
+            return SingleChildScrollView(
+              controller: controller,
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: SizedBox(
+                          width: 200,
+                          height: 200,
+                          child: _buildArtwork(coverTrack),
+                        ),
