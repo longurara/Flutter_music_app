@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:media_kit/media_kit.dart' hide Track;
@@ -9,6 +10,7 @@ import 'package:flutter_media_metadata/flutter_media_metadata.dart';
 import 'package:path/path.dart' as p;
 import 'package:googleapis_auth/auth_io.dart' as auth;
 import 'package:smtc_windows/smtc_windows.dart';
+import 'package:record/record.dart';
 
 import '../models/track.dart' as app;
 import '../services/google_drive_service.dart';
@@ -38,6 +40,33 @@ class PlayerNotifier extends ChangeNotifier {
   PlaybackTheme _playbackTheme = PlaybackTheme.vinyl;
   double _preampDb = 0;
   final Map<int, double> _eqGains = {60: 0, 230: 0, 910: 0, 3600: 0, 14000: 0};
+  // Auto-EQ realtime
+  bool _autoEqEnabled = false;
+  bool _autoEqBusy = false;
+  String? _autoEqStatus;
+  Map<int, double>? _autoEqManualBackup;
+  AudioRecorder? _autoEqRecorder;
+  List<InputDevice> _autoEqInputs = [];
+  String? _autoEqPreferredDeviceId;
+  String? _autoEqPreferredDeviceLabel;
+  double _autoEqInputGainDb = 0;
+  StreamSubscription<Uint8List>? _autoEqSub;
+  Timer? _autoEqTimer;
+  DateTime? _autoEqLastData;
+  DateTime? _autoEqLastAdjust;
+  DateTime? _autoEqLastApply;
+  bool _autoEqRestarting = false;
+  int _autoEqSilentTicks = 0;
+  List<double> _autoEqBuffer = [];
+  Map<int, double> _autoEqEma = {};
+  bool _autoEqEmaInit = false;
+  InputDevice? _autoEqDevice;
+  static const double _autoEqAlpha = 0.82;
+  static const double _autoEqMaxGain = 4.0;
+  static const Duration _autoEqInterval = Duration(seconds: 1);
+  static const Duration _autoEqReinitInterval = Duration(seconds: 12);
+  static const Duration _autoEqApplyInterval = Duration(seconds: 12);
+  static const double _autoEqMinStepDb = 1.0;
   final Set<String> _audioExts = {
     '.mp3',
     '.flac',
@@ -66,6 +95,9 @@ class PlayerNotifier extends ChangeNotifier {
   Timer? _sleepTimer;
   Duration? _loopA;
   Duration? _loopB;
+  static const int _autoEqSampleRate = 44100;
+  static const int _autoEqWindow = 2048;
+  static const int _autoEqHop = 1024;
   final List<app.Track> _history = [];
   final List<app.Track> _library = [];
   final List<String> _pinnedFolders = [];
@@ -87,6 +119,12 @@ class PlayerNotifier extends ChangeNotifier {
   PlaybackTheme get playbackTheme => _playbackTheme;
   double get preampDb => _preampDb;
   Map<int, double> get eqGains => Map.unmodifiable(_eqGains);
+  bool get autoEqEnabled => _autoEqEnabled;
+  bool get autoEqBusy => _autoEqBusy;
+  String? get autoEqStatus => _autoEqStatus;
+  List<InputDevice> get autoEqInputs => List.unmodifiable(_autoEqInputs);
+  String? get autoEqPreferredDeviceLabel => _autoEqPreferredDeviceLabel;
+  double get autoEqInputGainDb => _autoEqInputGainDb;
   List<AudioDevice> get devices => _devices;
   AudioDevice? get selectedDevice => _selectedDevice;
   Duration get position => _position;
@@ -672,6 +710,9 @@ class PlayerNotifier extends ChangeNotifier {
       String? album = meta.albumName?.trim().isNotEmpty == true
           ? meta.albumName!.trim()
           : null;
+      final trackNumber = meta.trackNumber != null
+          ? int.tryParse(meta.trackNumber.toString())
+          : null;
       Uint8List? art =
           meta.albumArt ??
           _getSidecarArt(p.dirname(path)) ??
@@ -696,6 +737,7 @@ class PlayerNotifier extends ChangeNotifier {
         isFromDrive: existing?.isFromDrive ?? false,
         genre: meta.genre,
         year: meta.year,
+        trackNumber: trackNumber ?? existing?.trackNumber,
         duration: dur ?? existing?.duration,
       );
       _replaceTrack(updated);
@@ -816,6 +858,99 @@ class PlayerNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> startAutoEq({String? preferredDeviceId}) async {
+    if (_wasapiExclusive) {
+      _autoEqStatus = 'Disable WASAPI exclusive to use auto-EQ.';
+      notifyListeners();
+      return;
+    }
+    if (_autoEqEnabled || _autoEqBusy) return;
+    _autoEqBusy = true;
+    _autoEqStatus = 'Starting auto-EQ...';
+    notifyListeners();
+
+    _autoEqManualBackup = Map<int, double>.from(_eqGains);
+    _autoEqBuffer = [];
+    _autoEqEma = {for (final b in _eqGains.keys) b: 0.0};
+    _autoEqEmaInit = false;
+    _autoEqLastData = null;
+    _autoEqRestarting = false;
+
+    final recorder = AudioRecorder();
+    _autoEqRecorder = recorder;
+    try {
+      final hasPerm = await recorder.hasPermission();
+      if (!hasPerm) {
+        _autoEqStatus = 'Microphone permission denied.';
+        _autoEqBusy = false;
+        notifyListeners();
+        return;
+      }
+      final device = await _pickAutoEqDevice(
+        recorder,
+        preferredDeviceId ?? _autoEqPreferredDeviceId,
+      );
+      _autoEqDevice = device;
+      final stream = await recorder.startStream(
+        RecordConfig(
+          encoder: AudioEncoder.pcm16bits,
+          sampleRate: _autoEqSampleRate,
+          numChannels: 1,
+          device: device,
+        ),
+      );
+      _autoEqSub = stream.listen(
+        _onAutoEqData,
+        onError: (e, _) {
+          _autoEqStatus = 'Auto-EQ error: $e';
+          notifyListeners();
+          stopAutoEq();
+        },
+        cancelOnError: true,
+      );
+      _autoEqTimer?.cancel();
+      _autoEqTimer = Timer.periodic(_autoEqInterval, (_) => _processAutoEq());
+      _autoEqEnabled = true;
+      _autoEqStatus = 'Auto-EQ running${device != null ? ' (${device.label})' : ''}';
+    } catch (e) {
+      _autoEqStatus = 'Auto-EQ failed: $e';
+      await _stopAutoEqInternal(restore: true);
+    } finally {
+      _autoEqBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> stopAutoEq({bool restore = true}) async {
+    await _stopAutoEqInternal(restore: restore);
+  }
+
+  Future<void> refreshAutoEqInputs() async {
+    try {
+      final recorder = AudioRecorder();
+      final hasPerm = await recorder.hasPermission();
+      if (!hasPerm) return;
+      final inputs = await recorder.listInputDevices();
+      _autoEqInputs = inputs;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  void setAutoEqInput(InputDevice? device) {
+    _autoEqPreferredDeviceId = device?.id;
+    _autoEqPreferredDeviceLabel = device?.label;
+    _autoEqStatus =
+        device != null ? 'Will use ${device.label} for auto-EQ.' : 'Using default input.';
+    notifyListeners();
+  }
+
+  void setAutoEqInputGain(double db) {
+    _autoEqInputGainDb = db;
+    _autoEqStatus =
+        'Input gain ${db >= 0 ? '+' : ''}${db.toStringAsFixed(0)} dB applied.';
+    notifyListeners();
+  }
+
   double _dbToLinear(double db) {
     return (db <= -50) ? 0 : pow(10, db / 20).toDouble();
   }
@@ -843,6 +978,7 @@ class PlayerNotifier extends ChangeNotifier {
     _sleepTimer = null;
     _smtc?.dispose();
     _player.dispose();
+    unawaited(_stopAutoEqInternal(restore: false));
     super.dispose();
   }
 
@@ -876,24 +1012,299 @@ class PlayerNotifier extends ChangeNotifier {
     await _player.next();
   }
 
-  Future<void> _applyEqFilters() async {
+  Future<void> _applyEqFilters({bool rampForAuto = false}) async {
     if (_wasapiExclusive) return;
     try {
-      final parts = _eqGains.entries
+      final filters = _eqGains.entries
           .where((e) => e.value.abs() > 0.01)
           .map(
             (e) =>
-                'equalizer=f=${e.key}:width_type=q:width=1.0:g=${e.value.toStringAsFixed(1)}',
+                'lavfi=[equalizer=f=${e.key}:t=q:w=1.0:g=${e.value.toStringAsFixed(1)}]',
           )
           .toList();
-      final filter = parts.join(',');
       final platform = _player.platform;
       if (platform != null) {
-        await (platform as dynamic).setProperty('af', filter);
+        final backend = platform as dynamic;
+        final shouldRamp = rampForAuto && !_wasapiExclusive && _playing;
+        double? prevVolume;
+        if (shouldRamp) {
+          prevVolume = _volume;
+          final target = max(5.0, prevVolume * 0.35);
+          try {
+            await _player.setVolume(target);
+          } catch (_) {}
+        }
+        await backend.command('af', ['clr']);
+        for (final f in filters) {
+          await backend.command('af', ['add', f]);
+        }
+        if (filters.isEmpty) {
+          await backend.command('af', ['set', '']);
+        }
+        if (shouldRamp && prevVolume != null) {
+          await Future<void>.delayed(const Duration(milliseconds: 80));
+          try {
+            await _player.setVolume(prevVolume);
+          } catch (_) {}
+        }
       }
     } catch (_) {
-      // ignore failures to set filters
+      // Fallback best-effort: try setting af property as a single chain.
+      try {
+        final filters = _eqGains.entries
+            .where((e) => e.value.abs() > 0.01)
+            .map(
+              (e) =>
+                  'lavfi=[equalizer=f=${e.key}:t=q:w=1.0:g=${e.value.toStringAsFixed(1)}]',
+            )
+            .join(',');
+        final platform = _player.platform;
+        if (platform != null) {
+          await (platform as dynamic).setProperty('af', filters);
+        }
+      } catch (_) {
+        // ignore failures to set filters
+      }
     }
+  }
+
+  Future<void> _processAutoEq() async {
+    if (!_autoEqEnabled) return;
+    if (!_autoEqRestarting &&
+        _autoEqLastData != null &&
+        DateTime.now().difference(_autoEqLastData!).inSeconds > 3) {
+      _autoEqStatus = 'Input stream idle, restarting...';
+      notifyListeners();
+      _autoEqRestarting = true;
+      await _restartAutoEqStream();
+      _autoEqRestarting = false;
+      return;
+    }
+    final buffer = List<double>.from(_autoEqBuffer);
+    if (buffer.length < _autoEqWindow) {
+      _autoEqStatus = 'Collecting signal...';
+      notifyListeners();
+      return;
+    }
+    final rms = _rms(buffer);
+    final rmsDb = 20 * log(rms + 1e-12) / ln10;
+    if (rmsDb < -90) {
+      _autoEqSilentTicks += 1;
+    } else {
+      _autoEqSilentTicks = 0;
+    }
+    if (_autoEqSilentTicks >= 3 && !_autoEqRestarting) {
+      _autoEqStatus = 'Low input (-90 dBFS), restarting input...';
+      notifyListeners();
+      _autoEqRestarting = true;
+      await _restartAutoEqStream();
+      _autoEqSilentTicks = 0;
+      _autoEqRestarting = false;
+      return;
+    }
+    final bandDb = <int, double>{};
+    for (final freq in _eqGains.keys) {
+      final mags = <double>[];
+      for (var i = 0; i + _autoEqWindow <= buffer.length; i += _autoEqHop) {
+        final window = buffer.sublist(i, i + _autoEqWindow);
+        mags.add(_goertzel(window, freq.toDouble()));
+      }
+      if (mags.isEmpty) {
+        bandDb[freq] = -120;
+      } else {
+        final avg = mags.reduce((a, b) => a + b) / mags.length;
+        bandDb[freq] = 20 * log(avg + 1e-9) / ln10;
+      }
+    }
+    final values = bandDb.values.toList()..sort();
+    final median = values[values.length ~/ 2];
+    final shouldReinit = _autoEqLastAdjust == null ||
+        DateTime.now().difference(_autoEqLastAdjust!) > _autoEqReinitInterval;
+    final newGains = <int, double>{};
+    bandDb.forEach((freq, db) {
+      final target = (median - db).clamp(-_autoEqMaxGain, _autoEqMaxGain);
+      final prev = _autoEqEma[freq] ?? target;
+      final smoothed = _autoEqEmaInit
+          ? prev * _autoEqAlpha + target * (1 - _autoEqAlpha)
+          : target;
+      newGains[freq] = double.parse(smoothed.toStringAsFixed(1));
+    });
+    _autoEqEma = newGains;
+    _autoEqEmaInit = !shouldReinit;
+    final now = DateTime.now();
+    final maxDelta = _eqGains.entries
+        .map((e) => (newGains[e.key]! - e.value).abs())
+        .fold<double>(0, (prev, v) => max(prev, v));
+    final canApply = _playing &&
+        (_autoEqLastApply == null ||
+            now.difference(_autoEqLastApply!) >= _autoEqApplyInterval ||
+            maxDelta >= _autoEqMinStepDb);
+    if (!canApply) {
+      _autoEqStatus =
+          'Auto-EQ holding to avoid glitches • Level: ${rmsDb.toStringAsFixed(1)} dBFS';
+      notifyListeners();
+      return;
+    }
+    _eqGains.addAll(newGains);
+    await _applyEqFilters(rampForAuto: true);
+    _autoEqLastApply = now;
+    final deviceLabel =
+        _autoEqDevice != null ? ' (${_autoEqDevice!.label})' : '';
+    _autoEqStatus =
+        'Auto-EQ running$deviceLabel • Level: ${rmsDb.toStringAsFixed(1)} dBFS';
+    _autoEqLastAdjust = DateTime.now();
+    notifyListeners();
+  }
+
+  Future<void> _restartAutoEqStream() async {
+    try {
+      await _autoEqSub?.cancel();
+      _autoEqSub = null;
+      try {
+        await _autoEqRecorder?.stop();
+      } catch (_) {}
+      if (_autoEqRecorder == null) return;
+      final stream = await _autoEqRecorder!.startStream(
+        RecordConfig(
+          encoder: AudioEncoder.pcm16bits,
+          sampleRate: _autoEqSampleRate,
+          numChannels: 1,
+          device: _autoEqDevice,
+        ),
+      );
+      _autoEqSub = stream.listen(
+        _onAutoEqData,
+        onError: (e, _) {
+          _autoEqStatus = 'Auto-EQ error: $e';
+          notifyListeners();
+          stopAutoEq();
+        },
+        cancelOnError: true,
+      );
+      _autoEqBuffer = [];
+      _autoEqLastData = null;
+      _autoEqStatus =
+          'Auto-EQ running${_autoEqDevice != null ? ' (${_autoEqDevice!.label})' : ''}';
+      notifyListeners();
+    } catch (e) {
+      _autoEqStatus = 'Restart failed: $e';
+      notifyListeners();
+    }
+  }
+
+  void _onAutoEqData(Uint8List chunk) {
+    if (!_autoEqEnabled) return;
+    _autoEqLastData = DateTime.now();
+    final samples = _convertPcm16(chunk);
+    if (samples.isEmpty) return;
+    final gainLinear = pow(10, _autoEqInputGainDb / 20).toDouble();
+    if (gainLinear != 1.0) {
+      for (var i = 0; i < samples.length; i++) {
+        samples[i] = (samples[i] * gainLinear).clamp(-1.5, 1.5);
+      }
+    }
+    _autoEqBuffer.addAll(samples);
+    final maxSamples = _autoEqSampleRate * 2;
+    if (_autoEqBuffer.length > maxSamples) {
+      _autoEqBuffer = _autoEqBuffer.sublist(_autoEqBuffer.length - maxSamples);
+    }
+  }
+
+  List<double> _convertPcm16(Uint8List data) {
+    var len = data.lengthInBytes;
+    if (len < 2) return const [];
+    // Ensure even length and 2-byte alignment by copying if needed.
+    if (len.isOdd) len -= 1;
+    if (len <= 0) return const [];
+    final bytes = Uint8List(len);
+    bytes.setRange(0, len, data);
+    final sampleCount = len ~/ 2;
+    final samples = Int16List.view(bytes.buffer, 0, sampleCount);
+    return List<double>.generate(sampleCount, (i) => samples[i] / 32768.0);
+  }
+
+  double _goertzel(List<double> samples, double targetHz) {
+    final n = samples.length;
+    if (n == 0) return 0;
+    final k = (0.5 + (n * targetHz) / _autoEqSampleRate).floor();
+    final w = (2 * pi / n) * k;
+    final cosine = cos(w);
+    final sine = sin(w);
+    final coeff = 2 * cosine;
+
+    double q0 = 0;
+    double q1 = 0;
+    double q2 = 0;
+
+    for (final x in samples) {
+      q0 = coeff * q1 - q2 + x;
+      q2 = q1;
+      q1 = q0;
+    }
+
+    final real = q1 - q2 * cosine;
+    final imag = q2 * sine;
+    return sqrt(real * real + imag * imag) / n;
+  }
+
+  double _rms(List<double> samples) {
+    if (samples.isEmpty) return 0;
+    double sum = 0;
+    for (final s in samples) {
+      sum += s * s;
+    }
+    return sqrt(sum / samples.length);
+  }
+
+  Future<InputDevice?> _pickAutoEqDevice(
+    AudioRecorder recorder,
+    String? preferredDeviceId,
+  ) async {
+    try {
+      final devices = await recorder.listInputDevices();
+      if (devices.isEmpty) return null;
+      if (preferredDeviceId != null) {
+        final match = devices
+            .firstWhere((d) => d.id == preferredDeviceId, orElse: () => devices.first);
+        return match;
+      }
+      final loopback = devices.firstWhere(
+        (d) {
+          final label = d.label.toLowerCase();
+          return label.contains('loopback') ||
+              label.contains('stereo mix') ||
+              label.contains('what u hear');
+        },
+        orElse: () => devices.first,
+      );
+      return loopback;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _stopAutoEqInternal({bool restore = true}) async {
+    _autoEqEnabled = false;
+    _autoEqTimer?.cancel();
+    _autoEqTimer = null;
+    await _autoEqSub?.cancel();
+    _autoEqSub = null;
+    try {
+      await _autoEqRecorder?.stop();
+    } catch (_) {}
+    try {
+      await _autoEqRecorder?.dispose();
+    } catch (_) {}
+    _autoEqRecorder = null;
+    _autoEqBuffer = [];
+    _autoEqDevice = null;
+    if (restore && _autoEqManualBackup != null) {
+      _eqGains.addAll(_autoEqManualBackup!);
+      await _applyEqFilters();
+    }
+    _autoEqManualBackup = null;
+    _autoEqStatus = restore ? 'Auto-EQ stopped.' : _autoEqStatus;
+    notifyListeners();
   }
 
   Future<String?> _lookupArtwork(String artist, String title) async {
@@ -933,6 +1344,10 @@ class PlayerNotifier extends ChangeNotifier {
 
   Future<void> toggleShuffle() async {
     await _applyShuffle(!_isShuffle);
+  }
+
+  Future<void> setShuffle(bool enable) async {
+    await _applyShuffle(enable);
   }
 
   Future<void> _applyWasapi() async {

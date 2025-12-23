@@ -12,6 +12,7 @@ class Track {
   final DateTime addedAt;
   final String? genre;
   final int? year;
+  final int? trackNumber;
   final Duration? duration;
 
   Track({
@@ -26,6 +27,7 @@ class Track {
     DateTime? addedAt,
     this.genre,
     this.year,
+    this.trackNumber,
     this.duration,
   }) : addedAt = addedAt ?? DateTime.now();
 }

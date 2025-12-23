@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   flutter_media_metadata
   hotkey_manager_linux
   media_kit_libs_linux
+  record_linux
   screen_retriever
   window_manager
 )
