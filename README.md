@@ -1,60 +1,125 @@
 # Music (Flutter)
 
-Ứng dụng nghe nhạc Flutter (tập trung trải nghiệm desktop, đặc biệt Windows) với giao diện đĩa than/CD, hỗ trợ phát nhạc cục bộ, Google Drive (Chưa fix), lời bài hát và điều khiển hệ thống.
+Desktop-first Flutter music player with vinyl/CD themes, rich audio controls, lyrics, and optional Google Drive streaming (beta). Nội dung bên dưới có cả tiếng Anh và tiếng Việt.
 
-## Tính năng chính
-- Phát nhạc cục bộ từ nhiều định dạng: mp3, flac, m4a, aac, wav, ogg, opus.
-- Stream file hoặc thư mục công khai từ Google Drive; đăng nhập OAuth để duyệt toàn bộ Drive của bạn. (lỗi chưa fix)
-- Giao diện trình phát có ba chủ đề: đĩa vinyl, CD deck, hoặc chỉ hiển thị bìa album.
-- Lời bài hát tự động (lrclib, lyrics.ovh), hỗ trợ lyric đồng bộ nếu có.
-- Điều khiển phát: hàng đợi, shuffle, repeat, tua, vòng lặp A-B, tốc độ phát, volume, preamp và EQ 5 băng tần.
-- Tích hợp SMTC Windows (media keys, hiển thị bài hát) và quản lý cửa sổ không viền qua `window_manager`.
-- Gợi ý màu nền từ bìa album (palette) và cache artwork để tải nhanh.
+## English
+### Overview
+- Desktop-first Flutter music player with vinyl turntable / CD deck / artwork-only themes.
+- Queue, shuffle/repeat, history, lossless/Hi-Res indicator from `media_kit` audio params.
+- Lyrics via lrclib (prefers synced) with fallback to lyrics.ovh; cached per track.
+- Audio controls: preamp, 5-band EQ, Auto-EQ from loopback/mic (beta, input gain), room calibration via mic with suggested gains, playback speed, sleep timer, volume sheet.
+- Windows: SMTC (media keys + metadata), optional WASAPI Exclusive (disables EQ/preamp for bit-perfect), window management.
+- Sources: recursive offline folder scan for mp3/flac/m4a/aac/wav/ogg/opus, custom stream URLs. Google Drive streaming (public links or OAuth) is experimental and UI is hidden by default.
 
-## Công nghệ
-- Flutter 3.10+ (Dart 3.10+), Material 3.
-- `media_kit` cho phát nhạc đa nền tảng, `provider` cho state, `window_manager` và `smtc_windows` cho trải nghiệm desktop.
-- `google_sign_in`, `googleapis`, `googleapis_auth` cho tích hợp Drive; `palette_generator`, `cached_network_image` cho hiển thị bìa.
+### Online features (beta/hidden)
+- Stream public/shared Google Drive files or folders without sign-in.
+- OAuth sign-in to list/stream personal Drive audio.
+- UI is hidden (`_showOnlineFeatures = false` in `lib/main.dart`); enable only after you add your own Desktop OAuth client and accept the risks.
 
-## Yêu cầu
-- Flutter SDK (channel stable) và toolchain cho nền tảng bạn chạy.
-- Windows để dùng SMTC, phím media và WASAPI exclusive; nền tảng khác vẫn chạy nhưng các tính năng này có thể giới hạn.
-- OAuth client Google Drive (Desktop) nếu muốn đăng nhập Drive cá nhân.
+### Requirements
+- Flutter SDK 3.10+ (stable) and desktop toolchains you target.
+- Windows for SMTC and WASAPI Exclusive; macOS/Linux can play audio but miss Windows-only features.
+- Microphone permission for Auto-EQ and room calibration; loopback/“Stereo Mix” input improves accuracy.
+- Google Drive OAuth Desktop client ID if you want Drive features.
 
-## Cài đặt & chạy
+### Setup & run
 ```bash
 flutter pub get
-# Chạy desktop Windows
+# run Windows desktop
 flutter run -d windows
+# or choose another desktop target if enabled (macos/linux)
 ```
 
-## Cấu hình Google Drive OAuth (chưa fix)
-Ứng dụng đã khai báo `clientId` trong `GoogleDriveService`, nhưng bạn nên dùng OAuth client riêng:
+### Google Drive setup (optional, beta)
+1. Create OAuth Client type **Desktop** in Google Cloud Console (Credentials → Create OAuth client → Desktop app).
+2. Update `clientId` in `GoogleDriveService` initialization in `lib/main.dart`.
+3. Set `_showOnlineFeatures` to `true` in `lib/main.dart` if you want the Drive/Stream UI.
+4. On sign-in, the app opens the consent page; copy/paste the verification code to grant `drive.readonly`.
+5. Public links work without sign-in; personal library streaming needs OAuth and stable network.
 
-1. Vào Google Cloud Console → Credentials → Create OAuth client → Desktop app.
-2. Lấy `Client ID` và cập nhật trong [lib/main.dart](lib/main.dart#L33-L40) hoặc truyền qua biến môi trường/cấu hình theo cách bạn chọn.
-3. Khi đăng nhập, ứng dụng hiển thị mã thiết bị; mở đường dẫn xác minh, nhập mã và cấp quyền Drive.
+### Quick usage
+- Click **Add music** → **Add offline folder** to scan recursively (supports listed formats); pick via FilePicker or paste a path.
+- Open **Library** to browse Albums/Songs; open an album to play/shuffle tracks.
+- **Settings**: tweak EQ/preamp, toggle Auto-EQ (disable WASAPI exclusive first), run room calibration, pick audio device, set speed, sleep timer, theme, lyrics source, view history.
+- **Devices**: refresh and choose output; toggle WASAPI Exclusive (Windows).
+- **Lyrics overlay**: tap the chat icon to show lyrics beside Now Playing.
 
-Ứng dụng vẫn có thể stream file/folder công khai chỉ với liên kết chia sẻ (không cần đăng nhập).
+### Structure
+- `lib/main.dart`: UI, sheets (Library/Queue/Settings/Drive/Devices), theme, dynamic background.
+- `lib/state/player_notifier.dart`: Playback state, queue, SMTC, EQ/Auto-EQ, WASAPI, Drive, lyrics, history.
+- `lib/services/google_drive_service.dart`: Parse link/id, public streaming, OAuth helpers, Drive listing.
+- `lib/services/lyrics_service.dart`: lrclib & lyrics.ovh clients.
+- `lib/services/room_calibration_service.dart`: Mic capture and band gain suggestions.
+- `lib/models/track.dart`: Track model & metadata.
 
-## Cấu trúc thư mục rút gọn
-- [lib/main.dart](lib/main.dart): Khởi tạo app, chủ đề Material 3, màn hình Player.
-- [lib/state/player_notifier.dart](lib/state/player_notifier.dart): Core logic phát nhạc, hàng đợi, SMTC, EQ, Drive, lyrics.
-- [lib/services/google_drive_service.dart](lib/services/google_drive_service.dart): Trích xuất link/ID, stream công khai, OAuth device flow, duyệt file Drive.
-- [lib/services/lyrics_service.dart](lib/services/lyrics_service.dart): Lấy lời bài hát (lrclib/lyrics.ovh).
-- [lib/models/track.dart](lib/models/track.dart): Mô hình bài hát.
+### Development & testing
+- Lint: `flutter_lints` (see `analysis_options.yaml`).
+- Tests: `flutter test`.
+- Upgrades: prefer `flutter pub upgrade --major-versions` then verify desktop builds.
 
-## Ghi chú sử dụng
-- Có thể chọn thiết bị audio và bật/tắt WASAPI exclusive trên Windows.
-- Lyric được cache theo bài; lyric đồng bộ dùng để highlight khi phát.
-- Palette bìa album được cache để tránh tính lại khi chuyển bài.
-- Nếu gặp lỗi phát từ Drive, thử làm mới token hoặc kiểm tra lại quyền truy cập file. (chưa fix)
+### Known limitations
+- Drive/online streaming is experimental; sign-in or streaming may be flaky.
+- EQ/Auto-EQ disabled when WASAPI Exclusive is on (to keep bit-perfect path).
+- UI optimized for desktop; not tuned for small mobile screens.
 
-## Đóng góp & phát triển
-- Tuân thủ lint mặc định của `flutter_lints`.
-- Chạy kiểm thử mặc định: `flutter test`.
-- Khi cập nhật dependencies, ưu tiên `flutter pub upgrade --major-versions` và kiểm tra lại build desktop.
+---
 
+## Tiếng Việt
+### Tổng quan
+- Trình phát nhạc ưu tiên desktop với 3 chủ đề: vinyl turntable, CD deck, hoặc chỉ artwork.
+- Hàng chờ, shuffle/repeat, lịch sử nghe, nhãn Lossless/Hi-Res từ thông số `media_kit`.
+- Lời bài hát từ lrclib (ưu tiên lyric đồng bộ) và fallback lyrics.ovh; cache theo bài.
+- Âm thanh: preamp, EQ 5 băng, Auto-EQ realtime từ loopback/mic (beta, chỉnh gain đầu vào), đo phòng bằng mic và gợi ý gain, tốc độ phát, hẹn giờ ngủ, bảng volume.
+- Windows: SMTC (media keys + metadata), tùy chọn WASAPI Exclusive (tắt EQ/preamp để giữ bit-perfect), quản lý cửa sổ.
+- Nguồn phát: quét thư mục offline đệ quy (mp3/flac/m4a/aac/wav/ogg/opus), stream URL tùy ý. Google Drive (public/OAuth) ở trạng thái thử nghiệm và ẩn UI mặc định.
 
-## Lỗi hiện có:
-- Không đăng nhập được google drive hoặc stream file online
+### Tính năng online (beta/ẩn)
+- Stream file/thư mục công khai từ Google Drive không cần đăng nhập.
+- Đăng nhập OAuth để quét/stream thư viện Drive cá nhân.
+- UI đang tắt (`_showOnlineFeatures = false` trong `lib/main.dart`); chỉ bật khi bạn tự cấu hình OAuth client Desktop và chấp nhận rủi ro.
+
+### Yêu cầu
+- Flutter SDK 3.10+ (stable) và toolchain desktop bạn dùng.
+- Windows để có SMTC và WASAPI Exclusive; macOS/Linux vẫn phát nhạc nhưng thiếu tính năng Windows-only.
+- Quyền microphone cho Auto-EQ và đo phòng; input loopback/“Stereo Mix” sẽ chính xác hơn.
+- OAuth client Google Drive (Desktop) nếu muốn dùng Drive.
+
+### Cài đặt & chạy
+```bash
+flutter pub get
+# chạy desktop Windows
+flutter run -d windows
+# hoặc chọn thiết bị desktop khác nếu đã bật (macos/linux)
+```
+
+### Cấu hình Google Drive (tùy chọn, beta)
+1. Tạo OAuth Client **Desktop** trong Google Cloud Console (Credentials → Create OAuth client → Desktop app).
+2. Cập nhật `clientId` trong khởi tạo `GoogleDriveService` ở `lib/main.dart`.
+3. Đổi `_showOnlineFeatures` thành `true` trong `lib/main.dart` nếu muốn hiện UI Drive/Stream.
+4. Khi đăng nhập, ứng dụng mở trang consent; copy/paste mã xác minh để cấp quyền `drive.readonly`.
+5. Link công khai dùng được không cần đăng nhập; thư viện cá nhân cần OAuth và mạng ổn định.
+
+### Sử dụng nhanh
+- Nút **Add music** → **Add offline folder** để quét đệ quy (lọc các định dạng hỗ trợ); nhập đường dẫn hoặc chọn bằng FilePicker.
+- Mở **Library** để duyệt Album/Bài hát; mở album để Play/Shuffle.
+- **Settings**: chỉnh EQ/preamp, bật Auto-EQ (tắt WASAPI exclusive trước), đo Room EQ, chọn thiết bị audio, tốc độ phát, timer ngủ, theme, nguồn lyric, xem lịch sử.
+- **Devices**: làm mới và chọn đầu ra; bật WASAPI Exclusive (Windows).
+- **Lyrics overlay**: nhấn icon chat để xem lyric song song Now Playing.
+
+### Cấu trúc thư mục
+- `lib/main.dart`: UI, các sheet Library/Queue/Settings/Drive/Devices, theme, nền động.
+- `lib/state/player_notifier.dart`: Logic phát, hàng chờ, SMTC, EQ/Auto-EQ, WASAPI, Drive, lyrics, lịch sử.
+- `lib/services/google_drive_service.dart`: Parse link/id, stream công khai, OAuth helper, duyệt Drive.
+- `lib/services/lyrics_service.dart`: Gọi lrclib & lyrics.ovh.
+- `lib/services/room_calibration_service.dart`: Thu mic, tính gain đề xuất cho từng băng.
+- `lib/models/track.dart`: Model Track & metadata.
+
+### Phát triển & kiểm thử
+- Lint: `flutter_lints` (xem `analysis_options.yaml`).
+- Kiểm thử: `flutter test`.
+- Nâng cấp dependency: ưu tiên `flutter pub upgrade --major-versions` rồi build desktop kiểm tra.
+
+### Hạn chế đã biết
+- Tính năng Drive/stream online còn thử nghiệm; đăng nhập hoặc stream có thể không ổn định.
+- EQ/Auto-EQ bị tắt khi bật WASAPI Exclusive (để giữ signal bit-perfect).
+- UI tối ưu cho desktop; chưa tối ưu cho màn hình mobile nhỏ.
