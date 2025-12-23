@@ -1,7 +1,6 @@
 # Music (Flutter)
 
-Desktop-first Flutter music player with vinyl/CD themes, rich audio controls, lyrics, and optional Google Drive streaming (beta). Nội dung bên dưới có cả tiếng Anh và tiếng Việt.
-
+Desktop-first Flutter music player with vinyl/CD themes, rich audio controls, lyrics, and optional Google Drive streaming (beta).
 ## English
 ### Overview
 - Desktop-first Flutter music player with vinyl turntable / CD deck / artwork-only themes.
