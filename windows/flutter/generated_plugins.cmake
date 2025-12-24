@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   flutter_media_metadata
   hotkey_manager_windows
   media_kit_libs_windows_audio
+  permission_handler_windows
   record_windows
   screen_retriever
   window_manager

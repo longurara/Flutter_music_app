@@ -9,6 +9,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
+import 'package:permission_handler/permission_handler.dart';
 import 'package:smtc_windows/smtc_windows.dart';
 import 'package:palette_generator/palette_generator.dart';
 import 'package:provider/provider.dart';
@@ -22,20 +23,24 @@ import 'state/player_notifier.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  final isDesktop =
+      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
   if (Platform.isWindows) {
     await SMTCWindows.initialize();
   }
-  await windowManager.ensureInitialized();
-  MediaKit.ensureInitialized();
+  if (isDesktop) {
+    await windowManager.ensureInitialized();
 
-  const windowOptions = WindowOptions(
-    titleBarStyle: TitleBarStyle.hidden,
-    windowButtonVisibility: false,
-  );
-  await windowManager.waitUntilReadyToShow(windowOptions, () async {
-    await windowManager.show();
-    await windowManager.focus();
-  });
+    const windowOptions = WindowOptions(
+      titleBarStyle: TitleBarStyle.hidden,
+      windowButtonVisibility: false,
+    );
+    await windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.show();
+      await windowManager.focus();
+    });
+  }
+  MediaKit.ensureInitialized();
 
   runApp(const MusicApp());
 }
@@ -84,6 +89,7 @@ class PlayerScreen extends StatefulWidget {
 class _PlayerScreenState extends State<PlayerScreen>
     with SingleTickerProviderStateMixin {
   static const bool _showOnlineFeatures = false;
+  bool get _isMobile => Platform.isAndroid || Platform.isIOS;
   final _driveController = TextEditingController();
   final _titleController = TextEditingController();
   final _artistController = TextEditingController();
@@ -251,21 +257,27 @@ class _PlayerScreenState extends State<PlayerScreen>
     final playbackTheme = context.select<PlayerNotifier, PlaybackTheme>(
       (n) => n.playbackTheme,
     );
+    final isMobile = _isMobile;
     _syncDiscSpin(playing);
     _ensurePalette(track);
 
     return Scaffold(
+      appBar: isMobile ? _buildMobileAppBar(notifier) : null,
       body: Stack(
         children: [
           RepaintBoundary(
             child: _buildBlurredBackground(track),
           ),
           SafeArea(
+            top: !isMobile,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+              padding: EdgeInsets.symmetric(
+                horizontal: isMobile ? 16 : 24,
+                vertical: isMobile ? 10 : 14,
+              ),
               child: Column(
                 children: [
-                  _buildTopActions(notifier),
+                  if (!isMobile) _buildTopActions(notifier),
                   Expanded(
                     child: LayoutBuilder(
                       builder: (context, constraints) {
@@ -273,49 +285,59 @@ class _PlayerScreenState extends State<PlayerScreen>
                             ? constraints.maxHeight - 80
                             : constraints.maxHeight;
                         if (_lyricsOverlay && track != null) {
-                          return AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 260),
-                            child: Row(
-                              key: const ValueKey('lyrics-overlay'),
-                              children: [
-                                Expanded(
-                                  flex: 5,
-                                  child: SingleChildScrollView(
-                                    padding: const EdgeInsets.symmetric(
-                                        vertical: 12),
-                                    child: ConstrainedBox(
-                                      constraints:
-                                          BoxConstraints(minHeight: minHeight),
-                                      child: Center(
-                                        child: _buildNowPlaying(
-                                          context,
-                                          notifier,
-                                          track,
-                                          playbackTheme,
-                                          playing,
+                          if (isMobile) {
+                            return AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 260),
+                              child: _buildMobileLyricsOverlay(
+                                notifier,
+                                track,
+                              ),
+                            );
+                          } else {
+                            return AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 260),
+                              child: Row(
+                                key: const ValueKey('lyrics-overlay'),
+                                children: [
+                                  Expanded(
+                                    flex: 5,
+                                    child: SingleChildScrollView(
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 12),
+                                      child: ConstrainedBox(
+                                        constraints: BoxConstraints(
+                                            minHeight: minHeight),
+                                        child: Center(
+                                          child: _buildNowPlaying(
+                                            context,
+                                            notifier,
+                                            track,
+                                            playbackTheme,
+                                            playing,
+                                          ),
                                         ),
                                       ),
                                     ),
                                   ),
-                                ),
-                                const SizedBox(width: 18),
-                                Expanded(
-                                  flex: 5,
-                                  child: Selector<PlayerNotifier, LyricsResult?>(
-                                    selector: (_, state) => state.lyrics,
-                                    builder: (_, lyrics, __) {
-                                      return _buildLyricsPanel(
-                                        notifier,
-                                        track,
-                                        minHeight,
-                                        lyrics,
-                                      );
-                                    },
+                                  const SizedBox(width: 18),
+                                  Expanded(
+                                    flex: 5,
+                                    child: Selector<PlayerNotifier,
+                                        LyricsResult?>(
+                                      selector: (_, state) => state.lyrics,
+                                      builder: (_, lyrics, __) {
+                                        return _buildLyricsPanel(
+                                          notifier,
+                                          track,
+                                          lyrics,
+                                        );
+                                      },
+                                    ),
                                   ),
-                                ),
-                              ],
-                            ),
-                          );
+                                ],
+                              ),
+                            );
+                          }
                         }
                         return SingleChildScrollView(
                           padding: const EdgeInsets.symmetric(vertical: 12),
@@ -393,6 +415,38 @@ class _PlayerScreenState extends State<PlayerScreen>
           ),
         ],
       ),
+    );
+  }
+
+  PreferredSizeWidget _buildMobileAppBar(PlayerNotifier notifier) {
+    return AppBar(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      foregroundColor: Colors.white,
+      title: const Text('Music'),
+      titleSpacing: 4,
+      actions: [
+        IconButton(
+          tooltip: 'Library',
+          icon: const Icon(Icons.library_music_outlined),
+          onPressed: () => _openLibrarySheet(notifier),
+        ),
+        IconButton(
+          tooltip: 'Queue',
+          icon: const Icon(Icons.queue_music),
+          onPressed: () => _openQueueSheet(notifier),
+        ),
+        IconButton(
+          tooltip: 'Devices',
+          icon: const Icon(Icons.cast),
+          onPressed: () => _openDeviceSheet(notifier),
+        ),
+        IconButton(
+          tooltip: 'Add music',
+          icon: const Icon(Icons.add),
+          onPressed: () => _openAddMenu(notifier),
+        ),
+      ],
     );
   }
 
@@ -859,6 +913,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   Widget _buildControlsRow(PlayerNotifier notifier) {
+    final isMobile = _isMobile;
     final iconColor = Colors.white;
     return Selector<PlayerNotifier, _ControlsState>(
       selector: (_, state) => _ControlsState(
@@ -869,71 +924,120 @@ class _PlayerScreenState extends State<PlayerScreen>
         isShuffle: state.isShuffle,
       ),
       builder: (_, data, __) {
-        return Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            IconButton(
-              icon: const Icon(Icons.volume_up),
-              color: iconColor.withOpacity(0.8),
-              onPressed: () => _openVolumeSheet(notifier),
-            ),
-            IconButton(
-              icon: const Icon(Icons.more_horiz),
-              color: iconColor.withOpacity(0.8),
-              onPressed: () => _openSettingsSheet(notifier),
-            ),
-            IconButton(
-              icon: const Icon(Icons.skip_previous_rounded),
-              color: iconColor,
-              iconSize: 32,
-              onPressed: data.hasPrevious ? notifier.previous : null,
-            ),
-            IconButton(
-              icon: Icon(
-                data.playing
-                    ? Icons.pause_circle_filled
-                    : Icons.play_circle_fill,
-              ),
-              color: iconColor,
-              iconSize: 48,
-              onPressed: notifier.togglePlay,
-            ),
-            IconButton(
-              icon: const Icon(Icons.skip_next_rounded),
-              color: iconColor,
-              iconSize: 32,
-              onPressed: data.hasNext ? notifier.next : null,
-            ),
-            IconButton(
-              icon: Icon(
-                switch (data.repeatMode) {
-                  PlaylistMode.single => Icons.repeat_one,
-                  PlaylistMode.loop => Icons.repeat,
-                  _ => Icons.repeat,
-                },
-              ),
-              color: data.repeatMode != PlaylistMode.none
-                  ? Colors.white
-                  : iconColor.withOpacity(0.8),
-              onPressed: notifier.cycleRepeat,
-            ),
-            IconButton(
-              icon: Icon(
-                Icons.shuffle,
-                color: data.isShuffle ? Colors.white : Colors.white70,
-              ),
-              onPressed: notifier.toggleShuffle,
-            ),
-            IconButton(
-              icon: const Icon(Icons.chat_bubble_outline),
-              color:
-                  _lyricsOverlay ? Colors.white : iconColor.withOpacity(0.8),
-              onPressed: () {
-                if (notifier.current == null) return;
-                setState(() => _lyricsOverlay = !_lyricsOverlay);
-              },
-            ),
-          ],
+        Widget button({
+          required IconData icon,
+          Color? color,
+          double size = 30,
+          VoidCallback? onPressed,
+        }) {
+          return IconButton(
+            icon: Icon(icon),
+            color: color ?? iconColor.withOpacity(0.9),
+            iconSize: size,
+            visualDensity: VisualDensity.compact,
+            constraints: const BoxConstraints.tightFor(width: 52, height: 52),
+            onPressed: onPressed,
+          );
+        }
+
+        final volBtn = button(
+          icon: Icons.volume_up,
+          color: iconColor.withOpacity(0.8),
+          onPressed: () => _openVolumeSheet(notifier),
+        );
+        final settingsBtn = button(
+          icon: Icons.more_horiz,
+          color: iconColor.withOpacity(0.8),
+          onPressed: () => _openSettingsSheet(notifier),
+        );
+        final prevBtn = button(
+          icon: Icons.skip_previous_rounded,
+          size: 32,
+          onPressed: data.hasPrevious ? notifier.previous : null,
+        );
+        final playBtn = IconButton(
+          icon: Icon(
+            data.playing ? Icons.pause_circle_filled : Icons.play_circle_fill,
+          ),
+          color: iconColor,
+          iconSize: 54,
+          visualDensity: VisualDensity.compact,
+          constraints: const BoxConstraints.tightFor(width: 64, height: 64),
+          onPressed: notifier.togglePlay,
+        );
+        final nextBtn = button(
+          icon: Icons.skip_next_rounded,
+          size: 32,
+          onPressed: data.hasNext ? notifier.next : null,
+        );
+        final repeatBtn = button(
+          icon: switch (data.repeatMode) {
+            PlaylistMode.single => Icons.repeat_one,
+            PlaylistMode.loop => Icons.repeat,
+            _ => Icons.repeat,
+          },
+          color: data.repeatMode != PlaylistMode.none
+              ? Colors.white
+              : iconColor.withOpacity(0.8),
+          onPressed: notifier.cycleRepeat,
+        );
+        final shuffleBtn = button(
+          icon: Icons.shuffle,
+          color: data.isShuffle ? Colors.white : Colors.white70,
+          onPressed: notifier.toggleShuffle,
+        );
+        final lyricsBtn = button(
+          icon: Icons.chat_bubble_outline,
+          color: _lyricsOverlay ? Colors.white : iconColor.withOpacity(0.8),
+          onPressed: () {
+            if (notifier.current == null) return;
+            setState(() => _lyricsOverlay = !_lyricsOverlay);
+          },
+        );
+
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = isMobile && constraints.maxWidth < 420;
+            if (compact) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      prevBtn,
+                      playBtn,
+                      nextBtn,
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      volBtn,
+                      settingsBtn,
+                      repeatBtn,
+                      shuffleBtn,
+                      lyricsBtn,
+                    ],
+                  ),
+                ],
+              );
+            }
+            return Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                volBtn,
+                settingsBtn,
+                prevBtn,
+                playBtn,
+                nextBtn,
+                repeatBtn,
+                shuffleBtn,
+                lyricsBtn,
+              ],
+            );
+          },
         );
       },
     );
@@ -1806,10 +1910,18 @@ class _PlayerScreenState extends State<PlayerScreen>
                     icon: const Icon(Icons.folder_open),
                     label: const Text('Browse'),
                     onPressed: () async {
+                      final granted = await _ensureStoragePermission();
+                      if (!granted) {
+                        _showSnack('Cần quyền đọc thư mục để quét nhạc.');
+                        return;
+                      }
                       final path = await FilePicker.platform.getDirectoryPath();
                       if (path != null) {
                         _folderController.text = path;
-                        await notifier.addFolderTracks(path);
+                        final ok = await notifier.addFolderTracks(path);
+                        if (!ok) {
+                          _showSnack('Không đọc được thư mục đã chọn.');
+                        }
                       }
                     },
                   ),
@@ -1820,7 +1932,16 @@ class _PlayerScreenState extends State<PlayerScreen>
                     onPressed: () async {
                       final path = _folderController.text.trim();
                       if (path.isNotEmpty) {
-                        await notifier.addFolderTracks(path);
+                        final granted = await _ensureStoragePermission();
+                        if (!granted) {
+                          _showSnack('Cần quyền đọc thư mục để quét nhạc.');
+                          return;
+                        }
+                        final ok = await notifier.addFolderTracks(path);
+                        if (!ok) {
+                          _showSnack('Không đọc được thư mục đã chọn.');
+                          return;
+                        }
                         if (!context.mounted) return;
                         Navigator.pop(context);
                       }
@@ -2301,8 +2422,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   Widget _buildLyricsPanel(
     PlayerNotifier notifier,
     app.Track track,
-    double minHeight,
     LyricsResult? result,
+    {bool fullScreen = false}
   ) {
     final syncedLines = (result != null && result.isSynced)
         ? _getSyncedLines(track, result)
@@ -2315,6 +2436,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         builder: (context, snapshot) {
           final pos = snapshot.data ?? notifier.position;
           final active = _currentLyricIndex(syncedLines, pos);
+          final panelHeight = fullScreen ? 420.0 : 280.0;
           final lines = <Widget>[];
           for (int offset = -2; offset <= 2; offset++) {
             final idx = active + offset;
@@ -2352,7 +2474,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           }
           final key = ValueKey<int>(active);
           return SizedBox(
-            height: 280,
+            height: panelHeight,
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 360),
               switchInCurve: Curves.easeOutCubic,
@@ -2402,7 +2524,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         padding: const EdgeInsets.symmetric(vertical: 16),
         child: Text(
           result?.lyrics ?? 'No lyrics yet. Play a track to fetch.',
-          textAlign: TextAlign.left,
+          textAlign: fullScreen ? TextAlign.center : TextAlign.left,
           style: const TextStyle(
             fontSize: 22,
             height: 1.4,
@@ -2414,11 +2536,13 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
-      padding: const EdgeInsets.symmetric(vertical: 12),
+      padding:
+          EdgeInsets.symmetric(vertical: fullScreen ? 8 : 12, horizontal: 4),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment:
+              fullScreen ? CrossAxisAlignment.center : CrossAxisAlignment.start,
           children: [
             if (result != null) ...[
               const SizedBox(height: 2),
@@ -2434,16 +2558,155 @@ class _PlayerScreenState extends State<PlayerScreen>
             ],
             const SizedBox(height: 12),
             Expanded(
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: hasSynced ? buildSyncedView() : buildStaticView(),
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: fullScreen ? 16 : 12,
                 ),
+                child: hasSynced ? buildSyncedView() : buildStaticView(),
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildMobileLyricsOverlay(
+    PlayerNotifier notifier,
+    app.Track track,
+  ) {
+    final artSize = 120.0;
+    return Selector<PlayerNotifier, LyricsResult?>(
+      selector: (_, state) => state.lyrics,
+      builder: (_, lyrics, __) {
+        return Column(
+          children: [
+            Row(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => setState(() => _lyricsOverlay = false),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        track.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        track.artist,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: Colors.white70),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chat_bubble_outline),
+                  onPressed: () => setState(() => _lyricsOverlay = false),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: SizedBox(
+                width: artSize,
+                height: artSize,
+                child: _buildArtwork(track),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: _buildLyricsPanel(
+                notifier,
+                track,
+                lyrics,
+                fullScreen: true,
+              ),
+            ),
+            const SizedBox(height: 10),
+            _buildTimeline(notifier),
+            const SizedBox(height: 10),
+            _buildLyricsControlsMobile(notifier),
+            const SizedBox(height: 10),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildLyricsControlsMobile(PlayerNotifier notifier) {
+    return Selector<PlayerNotifier, _ControlsState>(
+      selector: (_, state) => _ControlsState(
+        playing: state.playing,
+        hasPrevious: state.hasPrevious,
+        hasNext: state.hasNext,
+        repeatMode: state.repeatMode,
+        isShuffle: state.isShuffle,
+      ),
+      builder: (_, data, __) {
+        Color iconColor(bool active) =>
+            active ? Colors.white : Colors.white70;
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              IconButton(
+                icon: Icon(
+                  switch (data.repeatMode) {
+                    PlaylistMode.single => Icons.repeat_one,
+                    PlaylistMode.loop => Icons.repeat,
+                    _ => Icons.repeat,
+                  },
+                ),
+                color: iconColor(data.repeatMode != PlaylistMode.none),
+                onPressed: notifier.cycleRepeat,
+              ),
+              IconButton(
+                icon: const Icon(Icons.skip_previous_rounded),
+                color: Colors.white,
+                iconSize: 30,
+                onPressed: data.hasPrevious ? notifier.previous : null,
+              ),
+              IconButton(
+                icon: Icon(
+                  data.playing
+                      ? Icons.pause_circle_filled
+                      : Icons.play_circle_fill,
+                ),
+                color: Colors.white,
+                iconSize: 50,
+                onPressed: notifier.togglePlay,
+              ),
+              IconButton(
+                icon: const Icon(Icons.skip_next_rounded),
+                color: Colors.white,
+                iconSize: 30,
+                onPressed: data.hasNext ? notifier.next : null,
+              ),
+              IconButton(
+                icon: const Icon(Icons.shuffle),
+                color: iconColor(data.isShuffle),
+                onPressed: notifier.toggleShuffle,
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -2498,6 +2761,19 @@ class _PlayerScreenState extends State<PlayerScreen>
     return idx;
   }
 
+  double _sheetHeight(
+    BuildContext context, {
+    double mobileFraction = 0.7,
+    double desktopFraction = 0.55,
+    double minHeight = 320,
+    double maxHeight = 520,
+  }) {
+    final screenHeight = MediaQuery.of(context).size.height;
+    final target =
+        screenHeight * (_isMobile ? mobileFraction : desktopFraction);
+    return target.clamp(minHeight, maxHeight).toDouble();
+  }
+
   Future<void> _openQueueSheet(PlayerNotifier notifier) {
     return showModalBottomSheet(
       context: context,
@@ -2506,8 +2782,9 @@ class _PlayerScreenState extends State<PlayerScreen>
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (context) {
+        final height = _sheetHeight(context, mobileFraction: 0.72);
         return SizedBox(
-          height: 360,
+          height: height,
           child: notifier.queue.isEmpty
               ? const Center(child: Text('Queue is empty'))
               : ListView(
@@ -2630,8 +2907,9 @@ class _PlayerScreenState extends State<PlayerScreen>
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (context) {
+        final height = _sheetHeight(context, mobileFraction: 0.72);
         return SizedBox(
-          height: 360,
+          height: height,
           child: history.isEmpty
               ? const Center(child: Text('No history yet'))
               : ListView(
@@ -2663,6 +2941,25 @@ class _PlayerScreenState extends State<PlayerScreen>
                 ),
         );
       },
+    );
+  }
+
+  Future<bool> _ensureStoragePermission() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      final audioStatus = await Permission.audio.request();
+      if (audioStatus.isGranted) return true;
+      final storageStatus = await Permission.storage.request();
+      return storageStatus.isGranted;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
     );
   }
 

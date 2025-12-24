@@ -51,6 +51,11 @@ dependencies:
   googleapis: ^12.0.0
   googleapis_auth: ^1.6.0
   palette_generator: ^0.3.3+7
+  permission_handler: ^11.3.1
+
+dependency_overrides:
+  flutter_media_metadata:
+    path: plugins/flutter_media_metadata
 
 dev_dependencies:
   flutter_test:

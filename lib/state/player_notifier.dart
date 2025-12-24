@@ -650,17 +650,21 @@ class PlayerNotifier extends ChangeNotifier {
     _hydrateDriveArtwork(tracks);
   }
 
-  Future<void> addFolderTracks(String folderPath) async {
+  Future<bool> addFolderTracks(String folderPath) async {
     final dir = Directory(folderPath);
-    if (!dir.existsSync()) return;
+    if (!dir.existsSync()) return false;
     final audioFiles = <File>[];
-    await for (final entity in dir.list(recursive: true, followLinks: false)) {
-      if (entity is File &&
-          _audioExts.contains(p.extension(entity.path).toLowerCase())) {
-        audioFiles.add(entity);
+    try {
+      await for (final entity in dir.list(recursive: true, followLinks: false)) {
+        if (entity is File &&
+            _audioExts.contains(p.extension(entity.path).toLowerCase())) {
+          audioFiles.add(entity);
+        }
       }
+    } catch (_) {
+      return false;
     }
-    if (audioFiles.isEmpty) return;
+    if (audioFiles.isEmpty) return false;
     audioFiles.sort((a, b) => a.path.compareTo(b.path));
     final newTracks = <app.Track>[];
     for (final file in audioFiles) {
@@ -686,6 +690,7 @@ class PlayerNotifier extends ChangeNotifier {
     await setQueue(updated, startIndex: startIndex);
     await _player.play();
     _registerHistory(newTracks.first);
+    return true;
   }
 
   Future<void> _enrichMetadataAsync(String path) async {
@@ -1525,7 +1530,7 @@ class PlayerNotifier extends ChangeNotifier {
   void addPinnedFolder(String path) {
     if (!_pinnedFolders.contains(path)) {
       _pinnedFolders.add(path);
-      addFolderTracks(path);
+      unawaited(addFolderTracks(path));
     }
   }
 
