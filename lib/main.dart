@@ -8,6 +8,7 @@ import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:smtc_windows/smtc_windows.dart';
@@ -89,6 +90,8 @@ class PlayerScreen extends StatefulWidget {
 class _PlayerScreenState extends State<PlayerScreen>
     with SingleTickerProviderStateMixin {
   static const bool _showOnlineFeatures = false;
+  static const MethodChannel _appleMusicChannel =
+      MethodChannel('apple_music_picker');
   bool get _isMobile => Platform.isAndroid || Platform.isIOS;
   final _driveController = TextEditingController();
   final _titleController = TextEditingController();
@@ -456,6 +459,29 @@ class _PlayerScreenState extends State<PlayerScreen>
       await windowManager.startDragging();
     } catch (_) {
       // ignore drag failures
+    }
+  }
+
+  Future<void> _pickAppleMusic(PlayerNotifier notifier) async {
+    try {
+      final items =
+          await _appleMusicChannel.invokeListMethod<dynamic>('pick');
+      if (items == null || items.isEmpty) {
+        _showSnack('No playable Apple Music tracks returned.');
+        return;
+      }
+      final parsed = items
+          .whereType<Map>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+      final ok = await notifier.addAppleMusicTracks(parsed);
+      if (!ok) {
+        _showSnack('Could not add the selected tracks.');
+      }
+    } on PlatformException catch (e) {
+      _showSnack(e.message ?? 'Apple Music picker failed.');
+    } catch (_) {
+      _showSnack('Apple Music picker failed.');
     }
   }
 
@@ -1266,6 +1292,15 @@ class _PlayerScreenState extends State<PlayerScreen>
                     _openFolderSheet(notifier);
                   },
                 ),
+                if (Platform.isIOS)
+                  _SheetActionTile(
+                    icon: Icons.library_music,
+                    label: 'Apple Music',
+                    onTap: () async {
+                      Navigator.pop(context);
+                      await _pickAppleMusic(notifier);
+                    },
+                  ),
                 _SheetActionTile(
                   icon: Icons.equalizer,
                   label: 'Equalizer / Preamp',

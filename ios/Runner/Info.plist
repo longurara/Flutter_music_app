@@ -47,5 +47,7 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>This app uses the microphone for Auto-EQ and recording features.</string>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>This app uses your Apple Music library to let you pick and play tracks.</string>
 </dict>
 </plist>

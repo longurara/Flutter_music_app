@@ -1534,6 +1534,51 @@ class PlayerNotifier extends ChangeNotifier {
     }
   }
 
+  Future<bool> addAppleMusicTracks(List<Map<String, dynamic>> items) async {
+    if (items.isEmpty) return false;
+    final newTracks = <app.Track>[];
+    for (final item in items) {
+      final urlStr = item['url'] as String?;
+      if (urlStr == null || urlStr.isEmpty) continue;
+      final uri = Uri.tryParse(urlStr);
+      if (uri == null) continue;
+      final id = 'apple-${urlStr.hashCode}';
+      final title = (item['title'] as String?)?.trim();
+      final artist = (item['artist'] as String?)?.trim();
+      final album = (item['album'] as String?)?.trim();
+      Uint8List? artBytes;
+      final artBase64 = item['artwork'] as String?;
+      if (artBase64 != null && artBase64.isNotEmpty) {
+        try {
+          artBytes = base64Decode(artBase64);
+        } catch (_) {}
+      }
+      final durSeconds = (item['duration'] as num?)?.toDouble() ?? 0;
+      final duration = Duration(milliseconds: (durSeconds * 1000).round());
+      newTracks.add(
+        app.Track(
+          id: id,
+          title: title?.isNotEmpty == true ? title! : 'Apple Music Track',
+          artist: artist?.isNotEmpty == true ? artist! : 'Apple Music',
+          album: album?.isNotEmpty == true ? album : null,
+          artworkBytes: artBytes,
+          artworkUrl: null,
+          source: uri,
+          duration: duration,
+          addedAt: DateTime.now(),
+        ),
+      );
+    }
+    if (newTracks.isEmpty) return false;
+    _library.addAll(newTracks);
+    final startIndex = _queue.length;
+    final updated = [..._queue, ...newTracks];
+    await setQueue(updated, startIndex: startIndex);
+    await _player.play();
+    _registerHistory(newTracks.first);
+    return true;
+  }
+
   void removePinnedFolder(String path) {
     _pinnedFolders.remove(path);
     notifyListeners();
