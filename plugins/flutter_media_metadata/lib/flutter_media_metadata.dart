@@ -3,7 +3,6 @@
 /// A Flutter plugin to read metadata of media files.
 ///
 /// MIT License.
-/// Copyright (c) 2021-2022, Hitesh Kumar Saini <saini123hitesh@gmail.com>.
 ///
 /// _Minimal Example_
 /// ```dart
