@@ -1,0 +1,85 @@
+workflows:
+  ios-unsigned:
+    name: iOS Unsigned (manual re-sign)
+    environment:
+      flutter: stable
+      xcode: 15.4
+      cocoapods: true
+    scripts:
+      - name: Flutter clean & pub get
+        script: |
+          flutter clean
+          flutter pub get
+      - name: Build iOS app (no codesign)
+        script: |
+          flutter build ios --release --no-codesign
+      - name: Package unsigned IPA
+        script: |
+          APP_PATH=build/ios/iphoneos/Runner.app
+          OUT_DIR=build/ios/unsigned
+          mkdir -p "$OUT_DIR/Payload"
+          cp -R "$APP_PATH" "$OUT_DIR/Payload/Runner.app"
+          cd "$OUT_DIR"
+          zip -r ../Runner-unsigned.ipa Payload
+    artifacts:
+      - build/Runner-unsigned.ipa
+      - build/ios/iphoneos/Runner.app
+      - build/ios/archive/*.dSYM.zip
+
+  ios-release:
+    name: iOS Release (App Store)
+    environment:
+      flutter: stable
+      xcode: 15.4
+      cocoapods: true
+      # Define these in Codemagic UI (Environment variables / groups)
+      groups:
+        - ios_signing
+    scripts:
+      - name: Flutter clean & pub get
+        script: |
+          flutter clean
+          flutter pub get
+      - name: Prepare export options (App Store)
+        script: |
+          cat > $CM_BUILD_DIR/export_options.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${BUNDLE_ID}</key>
+              <string>${PROFILE_NAME}</string>
+            </dict>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>stripSwiftSymbols</key>
+            <true/>
+            <key>compileBitcode</key>
+            <false/>
+          </dict>
+          </plist>
+          EOF
+      - name: Build IPA
+        script: |
+          flutter build ipa --release --export-options-plist=$CM_BUILD_DIR/export_options.plist
+    artifacts:
+      - build/app/outputs/ipa/*.ipa
+      - build/app/outputs/ipa/*.dSYM.zip
+      - build/app/outputs/ipa/*.log
+    cache:
+      cache_paths:
+        - $HOME/Library/Caches/CocoaPods
+        - $HOME/.pub-cache
+        - $HOME/Library/Developer/Xcode/DerivedData
+    publishing:
+      app_store_connect:
+        auth: api_key
+        api_key: $APP_STORE_CONNECT_API_KEY
+        key_id: $APP_STORE_CONNECT_KEY_ID
+        issuer_id: $APP_STORE_CONNECT_ISSUER_ID
+        submit_to_testflight: true
+        submit_to_app_store: false
