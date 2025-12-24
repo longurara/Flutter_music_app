@@ -32,6 +32,7 @@ import ObjectiveC
           let picker = MPMediaPickerController(mediaTypes: .music)
           picker.allowsPickingMultipleItems = true
           picker.prompt = "Chọn nhạc từ Apple Music"
+          picker.showsCloudItems = true
           let delegate = AppleMusicPickerDelegate(result: result)
           picker.delegate = delegate
           // Hold delegate strongly by associating with picker.
@@ -53,14 +54,18 @@ private class AppleMusicPickerDelegate: NSObject, MPMediaPickerControllerDelegat
 
   func mediaPicker(_ mediaPicker: MPMediaPickerController, didPickMediaItems mediaItemCollection: MPMediaItemCollection) {
     let items = mediaItemCollection.items.compactMap { item -> [String: Any]? in
-      guard let url = item.assetURL else { return nil } // Stream-only tracks have nil
       var dict: [String: Any] = [
         "title": item.title ?? "",
         "artist": item.artist ?? "",
         "album": item.albumTitle ?? "",
-        "duration": item.playbackDuration,
-        "url": url.absoluteString
+        "duration": item.playbackDuration
       ]
+      if let url = item.assetURL {
+        dict["url"] = url.absoluteString
+      }
+      if let storeId = item.value(forProperty: MPMediaItemPropertyPlaybackStoreID) as? String {
+        dict["storeId"] = storeId
+      }
       if let art = item.artwork?.image(at: CGSize(width: 300, height: 300)),
          let data = art.pngData() {
         dict["artwork"] = data.base64EncodedString()

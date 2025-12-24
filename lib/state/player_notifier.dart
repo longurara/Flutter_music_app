@@ -734,7 +734,7 @@ class PlayerNotifier extends ChangeNotifier {
         id: trackId,
         title: title,
         artist: artist,
-        album: album ?? p.basename(p.dirname(path)),
+        album: album ?? existing?.album ?? 'Unknown Album',
         artworkBytes: art,
         artworkUrl: coverUrl,
         source: Uri.file(path),

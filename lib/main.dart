@@ -464,19 +464,26 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _pickAppleMusic(PlayerNotifier notifier) async {
     try {
-      final items =
-          await _appleMusicChannel.invokeListMethod<dynamic>('pick');
+      final items = await _appleMusicChannel.invokeListMethod<dynamic>('pick');
       if (items == null || items.isEmpty) {
-        _showSnack('No playable Apple Music tracks returned.');
+        _showSnack('No Apple Music tracks returned.');
         return;
       }
       final parsed = items
           .whereType<Map>()
           .map((m) => Map<String, dynamic>.from(m))
           .toList();
-      final ok = await notifier.addAppleMusicTracks(parsed);
+      final playable = parsed.where((m) => (m['url'] as String?)?.isNotEmpty == true).toList();
+      final cloudOnly = parsed.length - playable.length;
+      if (playable.isEmpty) {
+        _showSnack('Tracks are not downloaded. Please download in Music app first.');
+        return;
+      }
+      final ok = await notifier.addAppleMusicTracks(playable);
       if (!ok) {
         _showSnack('Could not add the selected tracks.');
+      } else if (cloudOnly > 0) {
+        _showSnack('Some tracks need to be downloaded in Music app to play.');
       }
     } on PlatformException catch (e) {
       _showSnack(e.message ?? 'Apple Music picker failed.');
